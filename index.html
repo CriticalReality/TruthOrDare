@@ -3,47 +3,34 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Truth or Dare — PeerJS Multiplayer</title>
+  <title>Truth or Dare — PeerJS Multiplayer (fixed)</title>
   <style>
     :root{--bg:#000;--fg:#ddd;--muted:#888}
     html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--fg)}
     .app{display:flex;flex-direction:column;height:100%;gap:12px;padding:18px}
     .center{margin:auto}
-
-    /* Buttons */
     .btn{background:#222;border:1px solid #444;padding:10px 14px;border-radius:8px;color:var(--fg);cursor:pointer;min-width:120px;transition:transform .12s ease,opacity .12s}
     .btn:hover{transform:translateY(-3px)}
     .muted{color:var(--muted)}
     input,select{background:#111;border:1px solid #333;padding:8px;border-radius:8px;color:var(--fg)}
-
-    /* Layout */
     .menu{display:flex;gap:12px;align-items:center}
     .menu .box{background:rgba(255,255,255,0.02);padding:20px;border-radius:10px;border:1px solid rgba(255,255,255,0.03)}
-
-    /* Room UI */
     .room{display:grid;grid-template-columns:300px 1fr 300px;gap:12px;align-items:start}
     .panel{background:rgba(255,255,255,0.02);padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.03)}
     .players{display:flex;flex-direction:column;gap:8px}
     .player{display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px}
     .swatch{width:36px;height:36px;border-radius:8px;flex:0 0 36px}
-
     .cards{display:flex;flex-direction:column;gap:8px}
     .card{background:rgba(255,255,255,0.03);padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.02)}
-
-    /* timer */
     .timer{display:flex;align-items:center;gap:10px}
     .ring{width:64px;height:64px;border-radius:50%;position:relative}
     .ring .fill{position:absolute;inset:0;border-radius:50%;box-shadow:inset 0 0 0 6px rgba(255,255,255,0.06)}
     .count{font-size:20px}
-
-    /* Animations */
     .fade-in{animation:fadeIn .28s ease both}
     @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-
-    /* responsive */
     @media (max-width:900px){.room{grid-template-columns:1fr;}.panel{width:100%}}
-
     footer{opacity:.6;font-size:13px}
+    button:disabled{opacity:0.5;cursor:not-allowed}
   </style>
 </head>
 <body>
@@ -153,25 +140,18 @@
     <footer>Built with PeerJS cloud — open-source; save this file as index.html and host on GitHub Pages for easy sharing.</footer>
   </div>
 
-  <!-- PeerJS CDN -->
+  <!-- PeerJS CDN (kept as in your original) -->
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <script>
-    /* SIMPLE ROOM PROTOCOL OVER PEERJS
-       - Host (creator) peerId acts as room id
-       - Host is authoritative and keeps room state
-       - messages: {type, payload}
-    */
-
-    // Utilities
+    /* --- utilities & UI refs --- */
     const qs = sel => document.querySelector(sel);
     const randColor = () => '#'+Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0');
 
-    // UI refs
     const menu = qs('#menu'), roomUI = qs('#roomUI');
     const nameInput = qs('#nameInput'), createBtn = qs('#createBtn'), joinBtn = qs('#joinBtn'), joinId = qs('#joinId');
     const roomIdDisplay = qs('#roomIdDisplay'), youName = qs('#youName'), youId = qs('#youId');
     const playersList = qs('#playersList'), yourCards = qs('#yourCards'), addCardBtn = qs('#addCardBtn'), cardText = qs('#cardText'), cardType = qs('#cardType');
-    const startRoundBtn = qs('#startRoundBtn'), roundDisplay = qs('#roundDisplay'), startRoundUI = qs('#turnInfo');
+    const startRoundBtn = qs('#startRoundBtn'), roundDisplay = qs('#roundDisplay');
     const turnInfo = qs('#turnInfo'), targetName = qs('#targetName'), timeLeft = qs('#timeLeft'), ringFill = qs('#ringFill');
     const votePanel = qs('#votePanel'), voteYes = qs('#voteYes'), voteNo = qs('#voteNo');
     const choosePanel = qs('#chooseTargetPanel'), chooseList = qs('#chooseList');
@@ -179,14 +159,13 @@
     const accentA = qs('#accentA'), accentB = qs('#accentB');
     const gameOver = qs('#gameOver'), winnerText = qs('#winnerText');
 
-    // Peer & room state
-    let peer = null; // PeerJS peer
-    let connMap = {}; // peerId -> DataConnection (for host)
+    /* --- network & state --- */
+    let peer = null;
+    let connMap = {}; // remotePeerId -> DataConnection (host: connections to clients)
     let isHost = false;
     let localId = null;
     let displayName = 'Player';
 
-    // host room state
     let roomState = {
       id: null,
       players: {}, // peerId -> {name, cards:[], score:0, color}
@@ -197,331 +176,377 @@
       status: 'lobby' // 'lobby'|'running'|'voting'|'choose'|'over'
     };
 
-    // client-local view of state (mirrors host)
     let clientState = null;
 
-    // TIMERS
     let countdownTimer = null;
-    let countdownEnd = 0;
 
-    // --- Peer helpers ---
+    /* --- Peer helpers --- */
     function makePeer() {
-      // Let PeerJS create an id for us (undefined), which will use cloud signalling.
+      if (peer) return;
+      // create Peer with default options
       peer = new Peer();
+
       peer.on('open', id => {
         localId = id;
         youId.textContent = id;
         console.log('peer open', id);
       });
 
+      // host accepts incoming connections
       peer.on('connection', conn => {
-        // Only host should accept incoming conns.
-        if (!isHost) { conn.on('open',()=>conn.close()); return; }
+        // if not host, politely close
+        if (!isHost) { conn.on('open', () => conn.close()); return; }
         setupConn(conn);
       });
 
-      peer.on('error', err => console.error('Peer error', err));
+      peer.on('error', err => {
+        console.error('Peer error', err);
+        // display in console; could surface to user UI if desired
+      });
+
+      peer.on('disconnected', ()=> console.warn('peer disconnected'));
+      peer.on('close', ()=> console.warn('peer closed'));
     }
 
     function setupConn(conn) {
       conn.on('data', data => handleMessage(conn.peer, data));
       conn.on('open', ()=>{
         connMap[conn.peer] = conn;
-        // if host, send current state to new peer
+        // send state to new client immediately
         if (isHost) {
           sendTo(conn, {type:'state', payload:roomState});
+          renderPlayers();
         }
       });
       conn.on('close', ()=>{
         delete connMap[conn.peer];
         if (isHost) {
+          // remove from room
           delete roomState.players[conn.peer];
+          // if current or previous target removed, clear them safely
+          if (roomState.currentTarget === conn.peer) roomState.currentTarget = null;
+          if (roomState.previousTarget === conn.peer) roomState.previousTarget = null;
           broadcast({type:'state', payload:roomState});
           renderPlayers();
         }
       });
+      conn.on('error', err => console.warn('conn error', err));
     }
 
     function connectToHost(hostId) {
-      const c = peer.connect(hostId);
+      if (!peer || !localId) return alert('peer not ready yet');
+      const c = peer.connect(hostId, {reliable:true});
       c.on('open', ()=>{
         setupConn(c);
         // announce join
         sendTo(c,{type:'join', payload:{name:displayName}});
       });
-      c.on('error', e=>console.error(e));
+      c.on('error', e=>console.error('connect error', e));
     }
 
     function sendTo(connOrPeerId, msg) {
+      // if string, treat as peerId -> connection map lookup
       if (typeof connOrPeerId === 'string') {
         const c = connMap[connOrPeerId];
         if (c && c.open) c.send(msg);
         return;
       }
-      // DataConnection
+      // DataConnection object
       if (connOrPeerId && connOrPeerId.open) connOrPeerId.send(msg);
     }
 
     function broadcast(msg) {
-      // send to all connected clients (host role)
-      Object.values(connMap).forEach(c=>{ if (c.open) c.send(msg); });
+      // host only
+      Object.values(connMap).forEach(c => { if (c.open) c.send(msg); });
     }
 
-    // --- Message handling ---
+    /* --- message handling --- */
     function handleMessage(fromPeerId, msg) {
       try {
-        const {type,payload} = msg;
-        if (isHost) return hostHandle(fromPeerId,type,payload);
-        return clientHandle(type,payload);
-      } catch(e){console.error('msg handle err',e)}
+        const {type, payload} = msg || {};
+        if (isHost) return hostHandle(fromPeerId, type, payload);
+        return clientHandle(type, payload, fromPeerId);
+      } catch(e){ console.error('msg handle err', e); }
     }
 
-    // Host-side message handling
-    function hostHandle(peerId,type,payload){
-      if (type==='join'){
-        // add player to room
-        roomState.players[peerId] = {name:payload.name,cards:[],score:0,color:randColor()};
-        broadcast({type:'state',payload:roomState});
-        renderPlayers();
-      } else if (type==='add_card'){
-        // player added a card
-        const card = {...payload.card, owner:peerId, id:Date.now()+Math.random()};
-        roomState.players[peerId].cards.push(card);
-        broadcast({type:'state',payload:roomState});
-        renderPlayers();
-      } else if (type==='start_turn'){
-        // only host should accept
-        roomState.status='running';
+    /* Host-side handlers */
+    function hostHandle(peerId, type, payload){
+      if (type === 'join') {
+        // add player
+        if (!roomState.players[peerId]) {
+          roomState.players[peerId] = { name: payload.name || 'Player', cards: [], score: 0, color: randColor() };
+          // send updated state to all
+          broadcast({type:'state', payload:roomState});
+          renderPlayers();
+        }
+      } else if (type === 'add_card') {
+        const card = {...payload.card, owner: peerId, id: Date.now() + Math.random()};
+        if (roomState.players[peerId]) {
+          roomState.players[peerId].cards.push(card);
+          broadcast({type:'state', payload:roomState});
+          renderPlayers();
+        }
+      } else if (type === 'start_turn') {
+        // start turn came from host UI or a client request; but only host executes authoritative start
+        const duration = payload.duration || 20;
+        roomState.status = 'running';
         roomState.currentTarget = payload.targetId;
-        roomState.previousTarget = payload.previousTarget||roomState.previousTarget;
-        roomState.round = payload.round;
-        broadcast({type:'start_turn', payload:{targetId:roomState.currentTarget, endTime:payload.endTime}});
-        broadcast({type:'state',payload:roomState});
-      } else if (type==='vote'){
-        // collect votes attached under temporary votes map
+        roomState.round = payload.round || roomState.round;
+        const endTime = Date.now() + duration*1000;
+        broadcast({type:'start_turn', payload:{targetId: roomState.currentTarget, endTime, duration}});
+        broadcast({type:'state', payload:roomState});
+      } else if (type === 'vote') {
         roomState.votes = roomState.votes || {};
         roomState.votes[peerId] = payload.vote;
-        // check if all players voted
         const totalPlayers = Object.keys(roomState.players).length;
-        if (Object.keys(roomState.votes).length >= totalPlayers){
-          // tally
+        if (Object.keys(roomState.votes).length >= totalPlayers) {
           const yes = Object.values(roomState.votes).filter(Boolean).length;
           const success = yes > (totalPlayers/2);
-          if (success){ roomState.players[roomState.currentTarget].score = (roomState.players[roomState.currentTarget].score||0) + 1; }
-          roomState.status='choose';
-          broadcast({type:'vote_result', payload:{success, votes:roomState.votes}});
-          broadcast({type:'state',payload:roomState});
+          if (success && roomState.currentTarget && roomState.players[roomState.currentTarget]) {
+            roomState.players[roomState.currentTarget].score = (roomState.players[roomState.currentTarget].score || 0) + 1;
+          }
+          roomState.status = 'choose';
+          broadcast({type:'vote_result', payload:{success, votes: roomState.votes}});
+          broadcast({type:'state', payload:roomState});
           roomState.votes = {};
         }
-      } else if (type==='choose_target'){
-        // target chosen by current target
+      } else if (type === 'choose_target') {
         const newTarget = payload.newTarget;
-        // transfer one card from previousTarget (which is currentTarget before change) to newTarget
         const prev = roomState.currentTarget;
-        if (prev && roomState.players[prev] && roomState.players[prev].cards.length>0){
+        if (prev && roomState.players[prev] && roomState.players[prev].cards && roomState.players[prev].cards.length > 0) {
           const card = roomState.players[prev].cards.shift();
-          if (card) roomState.players[newTarget].cards.push(card);
+          if (card && roomState.players[newTarget]) roomState.players[newTarget].cards.push(card);
         }
         roomState.previousTarget = prev;
         roomState.currentTarget = newTarget;
-        // increment round
-        roomState.round = (roomState.round||0) + 1;
-        // check end
-        if (roomState.round >= roomState.maxRounds){
-          roomState.status='over';
+        roomState.round = (roomState.round || 0) + 1;
+        // check end condition
+        if (roomState.round >= roomState.maxRounds) {
+          roomState.status = 'over';
           // compute winner
-          let winner = null; let top= -1;
-          Object.entries(roomState.players).forEach(([pid,p])=>{ if (p.score>top){top=p.score; winner={id:pid,name:p.name,score:p.score}}});
-          broadcast({type:'game_over',payload:{winner}});
-          broadcast({type:'state',payload:roomState});
+          let winner = null; let top = -1;
+          Object.entries(roomState.players).forEach(([pid,p]) => { if ((p.score||0) > top) { top = p.score; winner = {id: pid, name: p.name, score: p.score}; }});
+          broadcast({type:'game_over', payload:{winner}});
+          broadcast({type:'state', payload:roomState});
           return;
         }
-        roomState.status='running';
-        // start a new turn automatically with timer
-        const duration = 20; // seconds
-        const endTime = Date.now()+duration*1000;
-        broadcast({type:'start_turn', payload:{targetId:newTarget,endTime}});
-        broadcast({type:'state',payload:roomState});
+        roomState.status = 'running';
+        const duration = 20;
+        const endTime = Date.now() + duration*1000;
+        broadcast({type:'start_turn', payload:{targetId: newTarget, endTime, duration}});
+        broadcast({type:'state', payload:roomState});
       }
     }
 
-    // Client-side message handling
-    function clientHandle(type,payload){
-      if (type==='state'){
+    /* Client-side handlers */
+    function clientHandle(type, payload, fromPeerId) {
+      if (type === 'state') {
         clientState = payload;
+        // sync UI
         renderPlayers();
         updateYourCards();
-        roundDisplay.textContent = (payload.round||0)+' / '+(payload.maxRounds||0);
-      } else if (type==='start_turn'){
-        // show timer to all clients
-        clientState = clientState||{};
+        roundDisplay.textContent = (payload.round || 0) + ' / ' + (payload.maxRounds || 0);
+        // update accents to stable colors (take first two players or stored colors)
+        const players = payload.players || {};
+        const colors = Object.values(players).map(p => p.color).filter(Boolean);
+        accentA.style.background = colors[0] || '#444';
+        accentB.style.background = colors[1] || '#666';
+      } else if (type === 'start_turn') {
+        clientState = clientState || {};
         clientState.currentTarget = payload.targetId;
-        startCountdown(payload.endTime);
-      } else if (type==='vote_result'){
-        // display result
+        // set nice label for target
+        const tPlayers = clientState.players || {};
+        const label = (tPlayers[payload.targetId] && tPlayers[payload.targetId].name) || (payload.targetId === localId ? 'You' : payload.targetId);
+        targetName.textContent = label;
+        startCountdown(payload.endTime, payload.duration || 20);
+      } else if (type === 'vote_result') {
         const s = payload.success;
-        alert('Vote result: ' + (s? 'SUCCESS' : 'FAILED'));
-      } else if (type==='game_over'){
-        gameOver.style.display='block';
+        alert('Vote result: ' + (s ? 'SUCCESS' : 'FAILED'));
+      } else if (type === 'game_over') {
+        gameOver.style.display = 'block';
         winnerText.textContent = payload.winner ? (payload.winner.name + ' wins with ' + payload.winner.score + ' points') : 'No winner';
       }
     }
 
-    // --- UI actions ---
-    createBtn.onclick = async ()=>{
-      displayName = nameInput.value || 'Player';
+    /* --- UI actions --- */
+    createBtn.onclick = async ()=> {
+      displayName = nameInput.value.trim() || 'Player';
       isHost = true;
       makePeer();
-      // wait for id
-      const waitFor = ()=> new Promise(r=>{const t=setInterval(()=>{ if (localId){ clearInterval(t); r(); }},50)});
-      await waitFor();
+      // wait for id to be available
+      await waitForLocalId();
       roomState.id = localId;
-      roomState.maxRounds = parseInt(roundsSelect.value,10)||5;
-      roomState.players[localId] = {name:displayName,cards:[],score:0,color:randColor()};
-      // UI
-      menu.style.display='none'; roomUI.style.display='block';
+      roomState.maxRounds = parseInt(roundsSelect.value, 10) || 5;
+      roomState.players[localId] = { name: displayName, cards: [], score: 0, color: randColor() };
+
+      // show UI
+      menu.style.display = 'none'; roomUI.style.display = 'block';
       roomIdDisplay.textContent = localId; youName.textContent = displayName; youId.textContent = localId;
-      // host accepts incoming
       renderPlayers();
+      // host does not need a DataConnection to self; state is already set
     };
 
-    joinBtn.onclick = ()=>{
-      displayName = nameInput.value || 'Player';
+    joinBtn.onclick = ()=> {
+      displayName = nameInput.value.trim() || 'Player';
       isHost = false;
       makePeer();
-      // connect to room
       const id = joinId.value.trim(); if (!id) return alert('enter room id');
-      // wait open then connect
-      const waitFor = ()=> new Promise(r=>{const t=setInterval(()=>{ if (localId){ clearInterval(t); r(); }},50)});
-      waitFor().then(()=>{
+      waitForLocalId().then(()=> {
         connectToHost(id);
-        menu.style.display='none'; roomUI.style.display='block';
+        menu.style.display = 'none'; roomUI.style.display = 'block';
         roomIdDisplay.textContent = id; youName.textContent = displayName; youId.textContent = localId;
       });
     };
 
-    addCardBtn.onclick = ()=>{
+    async function waitForLocalId(){
+      if (localId) return;
+      return new Promise(r => {
+        const t = setInterval(()=>{ if (localId){ clearInterval(t); r(); } }, 50);
+      });
+    }
+
+    addCardBtn.onclick = ()=> {
       const text = cardText.value.trim(); if (!text) return;
       const ct = cardType.value;
-      const card = {type:ct,text};
-      if (isHost){
-        // host just adds locally
-        roomState.players[localId].cards.push({...card, id:Date.now()+Math.random(), owner:localId});
-        broadcast({type:'state',payload:roomState});
+      const card = {type:ct, text};
+      if (isHost) {
+        roomState.players[localId].cards.push({...card, id: Date.now()+Math.random(), owner: localId});
+        broadcast({type:'state', payload: roomState});
         renderPlayers(); updateYourCards();
       } else {
-        // send to host
-        // find connection to host (the only conn)
         const hostConn = Object.values(connMap)[0];
         if (!hostConn) return alert('not connected to host');
-        sendTo(hostConn,{type:'add_card', payload:{card}});
+        sendTo(hostConn, {type:'add_card', payload:{card}});
       }
-      cardText.value='';
+      cardText.value = '';
     };
 
-    startRoundBtn.onclick = ()=>{
+    startRoundBtn.onclick = ()=> {
       if (!isHost) return alert('only host may start rounds');
-      if (!roomState) return;
-      // pick a target randomly
-      const pids = Object.keys(roomState.players);
+      const pids = Object.keys(roomState.players || {});
       if (pids.length < 2) return alert('need at least 2 players');
-      const target = pids[Math.floor(Math.random()*pids.length)];
-      const duration = 20; // seconds
-      const endTime = Date.now()+duration*1000;
-      roomState.round = (roomState.round||0)+1;
+      // choose a target that is not last target if possible
+      let choices = pids.filter(id => id !== roomState.previousTarget);
+      if (choices.length === 0) choices = pids;
+      const target = choices[Math.floor(Math.random()*choices.length)];
+      const duration = 20;
+      roomState.round = (roomState.round || 0) + 1;
       roomState.currentTarget = target;
-      roomState.status='running';
-      roomState.maxRounds = parseInt(roundsSelect.value,10)||roomState.maxRounds;
-      broadcast({type:'start_turn',payload:{targetId:target,endTime}});
-      broadcast({type:'state',payload:roomState});
+      roomState.status = 'running';
+      roomState.maxRounds = parseInt(roundsSelect.value,10) || roomState.maxRounds;
+      const endTime = Date.now() + duration*1000;
+      broadcast({type:'start_turn', payload:{targetId: target, endTime, duration, round: roomState.round}});
+      broadcast({type:'state', payload:roomState});
     };
 
-    leaveBtn.onclick = ()=>{
+    leaveBtn.onclick = ()=> {
       location.reload();
     };
 
-    function renderPlayers(){
-      // host: use roomState, client: use clientState
-      const state = isHost ? roomState : clientState || {players:{}};
-      playersList.innerHTML='';
-      Object.entries(state.players||{}).forEach(([pid,p])=>{
-        const el = document.createElement('div'); el.className='player';
-        el.innerHTML = `<div class="swatch" style="background:${p.color}"></div><div style="flex:1"><div><strong>${p.name}</strong> <span class="muted">${pid===localId? '(you)':''}</span></div><div class="muted" style="font-size:12px">Score: ${p.score||0} · Cards: ${p.cards? p.cards.length:0}</div></div>`;
+    /* --- rendering --- */
+    function renderPlayers() {
+      const state = isHost ? roomState : (clientState || {players:{}});
+
+      playersList.innerHTML = '';
+      Object.entries(state.players || {}).forEach(([pid, p]) => {
+        const el = document.createElement('div'); el.className = 'player';
+        const youTag = (pid === localId) ? ' <span class="muted">(you)</span>' : '';
+        el.innerHTML = `<div class="swatch" style="background:${p.color}"></div><div style="flex:1"><div><strong>${p.name}</strong> ${youTag}</div><div class="muted" style="font-size:12px">Score: ${p.score||0} · Cards: ${p.cards? p.cards.length:0}</div></div>`;
         playersList.appendChild(el);
       });
-      // show choose target when in choose state and you are current target
-      if (!isHost && clientState && clientState.status==='choose' && clientState.currentTarget===localId){
+
+      // show choose target if in choose state and currentTarget is this client
+      if (!isHost && clientState && clientState.status === 'choose' && clientState.currentTarget === localId) {
         showChooseTargets(clientState.players);
+      } else {
+        choosePanel.style.display = 'none';
       }
 
-      // accents
-      if (state && state.id){ accentA.style.background = randColor(); accentB.style.background = randColor(); }
+      // stable accents (use first two players colors if available)
+      const colors = Object.values(state.players || {}).map(p => p.color).filter(Boolean);
+      accentA.style.background = colors[0] || '#333';
+      accentB.style.background = colors[1] || '#555';
     }
 
-    function updateYourCards(){
-      const state = isHost ? roomState : clientState || {players:{}};
+    function updateYourCards() {
+      const state = isHost ? roomState : (clientState || {players:{}});
       const p = state.players[localId];
-      yourCards.innerHTML='';
+      yourCards.innerHTML = '';
       if (!p) return;
-      (p.cards||[]).forEach(c=>{
+      (p.cards || []).forEach(c => {
         const d = document.createElement('div'); d.className='card'; d.textContent = `(${c.type}) ${c.text}`; yourCards.appendChild(d);
       });
     }
 
-    // Countdown and vote UI
-    function startCountdown(endTime){
-      turnInfo.style.display='block'; votePanel.style.display='none'; choosePanel.style.display='none';
-      const update = ()=>{
+    /* --- countdown & voting --- */
+    function startCountdown(endTime, duration=20) {
+      turnInfo.style.display = 'block';
+      votePanel.style.display = 'none';
+      choosePanel.style.display = 'none';
+      // set label for target if we have players info
+      const label = (clientState && clientState.players && clientState.players[ (clientState.currentTarget || '') ] && clientState.players[clientState.currentTarget].name) || (isHost && roomState.players && roomState.players[roomState.currentTarget] && roomState.players[roomState.currentTarget].name) || '';
+      if (label) targetName.textContent = label;
+
+      if (countdownTimer) clearInterval(countdownTimer);
+      const start = Date.now();
+      const totalMs = Math.max(1000, (endTime - start) > 0 ? (endTime - start) : duration*1000);
+      function update() {
         const now = Date.now();
-        const sleft = Math.max(0, Math.ceil((endTime-now)/1000));
+        const leftMs = Math.max(0, endTime - now);
+        const sleft = Math.ceil(leftMs / 1000);
         timeLeft.textContent = sleft;
-        const total = Math.max(1, Math.ceil((endTime - (endTime - 20000))/1000));
-        const pct = Math.max(0, Math.min(1,(endTime-now)/(20000)));
+        const pct = Math.max(0, Math.min(1, leftMs / totalMs));
+        // thickness visual mapping
         ringFill.style.boxShadow = `inset 0 0 0 ${Math.round(6 + (1-pct)*54)}px rgba(255,255,255,0.06)`;
-        if (now >= endTime){ clearInterval(countdownTimer); onCountdownComplete(); }
-      };
-      clearInterval(countdownTimer); countdownTimer = setInterval(update,200); update();
+        if (now >= endTime) {
+          clearInterval(countdownTimer);
+          onCountdownComplete();
+        }
+      }
+      update();
+      countdownTimer = setInterval(update, 200);
     }
 
-    function onCountdownComplete(){
-      // show voting UI
-      votePanel.style.display='block';
-      // enable vote buttons
+    function onCountdownComplete() {
+      turnInfo.style.display = 'none';
+      votePanel.style.display = 'block';
       voteYes.disabled = voteNo.disabled = false;
     }
 
     voteYes.onclick = ()=>{ sendVote(true); voteYes.disabled = voteNo.disabled = true; };
     voteNo.onclick = ()=>{ sendVote(false); voteYes.disabled = voteNo.disabled = true; };
 
-    function sendVote(v){
-      if (isHost){
-        // host handles votes locally
-        hostHandle(localId,'vote',{vote:v});
+    function sendVote(v) {
+      if (isHost) {
+        hostHandle(localId, 'vote', {vote: v});
       } else {
         const hostConn = Object.values(connMap)[0]; if (!hostConn) return alert('not connected');
-        sendTo(hostConn,{type:'vote', payload:{vote:v}});
+        sendTo(hostConn, {type:'vote', payload:{vote:v}});
       }
     }
 
-    function showChooseTargets(players){
-      choosePanel.style.display='block'; chooseList.innerHTML='';
-      Object.entries(players||{}).forEach(([pid,p])=>{
-        if (pid===localId) return; // cannot choose self
-        const b = document.createElement('button'); b.className='btn'; b.textContent = p.name; b.onclick = ()=>{
-          if (isHost){ hostHandle(localId,'choose_target',{newTarget:pid}); }
-          else { const hostConn = Object.values(connMap)[0]; sendTo(hostConn,{type:'choose_target', payload:{newTarget:pid}}); }
-          choosePanel.style.display='none';
+    /* --- choose targets UI --- */
+    function showChooseTargets(players) {
+      choosePanel.style.display = 'block';
+      chooseList.innerHTML = '';
+      Object.entries(players || {}).forEach(([pid, p])=>{
+        if (pid === localId) return;
+        const b = document.createElement('button'); b.className='btn'; b.textContent = p.name;
+        b.onclick = ()=> {
+          if (isHost) {
+            hostHandle(localId, 'choose_target', {newTarget: pid});
+          } else {
+            const hostConn = Object.values(connMap)[0]; if (!hostConn) return alert('not connected');
+            sendTo(hostConn, {type:'choose_target', payload:{newTarget: pid}});
+          }
+          choosePanel.style.display = 'none';
         };
         chooseList.appendChild(b);
       });
     }
 
-    // When acting as host, ensure local player is in connMap for convenience
-    // Also support host connecting to itself through roomState (no DataConnection)
-
-    // Peer initial setup: create peer early so localId exists even before create/join
+    // create peer at load so id is ready quickly
     makePeer();
-
   </script>
 </body>
 </html>
