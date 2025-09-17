@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Truth or Dare — PeerJS Multiplayer</title>
+  <style>
+    :root{--bg:#000;--fg:#ddd;--muted:#888}
+    html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--fg)}
+    .app{display:flex;flex-direction:column;height:100%;gap:12px;padding:18px}
+    .center{margin:auto}
+
+    /* Buttons */
+    .btn{background:#222;border:1px solid #444;padding:10px 14px;border-radius:8px;color:var(--fg);cursor:pointer;min-width:120px;transition:transform .12s ease,opacity .12s}
+    .btn:hover{transform:translateY(-3px)}
+    .muted{color:var(--muted)}
+    input,select{background:#111;border:1px solid #333;padding:8px;border-radius:8px;color:var(--fg)}
+
+    /* Layout */
+    .menu{display:flex;gap:12px;align-items:center}
+    .menu .box{background:rgba(255,255,255,0.02);padding:20px;border-radius:10px;border:1px solid rgba(255,255,255,0.03)}
+
+    /* Room UI */
+    .room{display:grid;grid-template-columns:300px 1fr 300px;gap:12px;align-items:start}
+    .panel{background:rgba(255,255,255,0.02);padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.03)}
+    .players{display:flex;flex-direction:column;gap:8px}
+    .player{display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px}
+    .swatch{width:36px;height:36px;border-radius:8px;flex:0 0 36px}
+
+    .cards{display:flex;flex-direction:column;gap:8px}
+    .card{background:rgba(255,255,255,0.03);padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.02)}
+
+    /* timer */
+    .timer{display:flex;align-items:center;gap:10px}
+    .ring{width:64px;height:64px;border-radius:50%;position:relative}
+    .ring .fill{position:absolute;inset:0;border-radius:50%;box-shadow:inset 0 0 0 6px rgba(255,255,255,0.06)}
+    .count{font-size:20px}
+
+    /* Animations */
+    .fade-in{animation:fadeIn .28s ease both}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+    /* responsive */
+    @media (max-width:900px){.room{grid-template-columns:1fr;}.panel{width:100%}}
+
+    footer{opacity:.6;font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1 style="margin:0">Truth or Dare — PeerJS Multiplayer</h1>
+      <p class="muted">No backend required — uses PeerJS cloud for peer discovery and data connections.</p>
+    </header>
+
+    <main class="center">
+      <div id="menu" class="menu box fade-in">
+        <div>
+          <div style="margin-bottom:8px">Display name</div>
+          <input id="nameInput" placeholder="Your name" value="Player" />
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button id="createBtn" class="btn">Create Room</button>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+            <input id="joinId" placeholder="Room ID" />
+            <button id="joinBtn" class="btn">Join Room</button>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <label class="muted">Rounds</label>
+          <select id="roundsSelect">
+            <option value="3">3</option>
+            <option value="5" selected>5</option>
+            <option value="7">7</option>
+          </select>
+          <div class="muted" style="font-size:12px;margin-top:6px">Tip: copy the Room ID and paste in Discord for friends to join.</div>
+        </div>
+      </div>
+
+      <div id="roomUI" style="display:none;width:95vw;max-width:1100px" class="fade-in">
+        <div style="margin-bottom:10px;display:flex;justify-content:space-between;gap:12px;align-items:center">
+          <div><strong>Room:</strong> <span id="roomIdDisplay"></span></div>
+          <div class="muted">You are <span id="youName"></span> · <span id="youId"></span></div>
+        </div>
+
+        <div class="room">
+          <div class="panel">
+            <h3>Players</h3>
+            <div id="playersList" class="players"></div>
+            <div style="margin-top:8px"><button id="leaveBtn" class="btn">Leave Room</button></div>
+          </div>
+
+          <div class="panel">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <h3>Game Area</h3>
+              <div style="display:flex;gap:8px;align-items:center">
+                <label class="muted">Round</label>
+                <div id="roundDisplay">0 / 0</div>
+                <button id="startRoundBtn" class="btn">Start Round</button>
+              </div>
+            </div>
+
+            <div id="mainStage" style="margin-top:12px">
+              <div id="turnInfo" style="display:none">
+                <div><strong>Target:</strong> <span id="targetName"></span></div>
+                <div style="margin-top:8px" class="timer">
+                  <div class="ring"><div id="ringFill" class="fill"></div></div>
+                  <div><div class="count" id="timeLeft">0</div><div class="muted">seconds left</div></div>
+                </div>
+              </div>
+
+              <div id="votePanel" style="display:none;margin-top:12px">
+                <div class="muted">Vote: Did they complete the challenge?</div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button class="btn" id="voteYes">Success</button>
+                  <button class="btn" id="voteNo">Fail</button>
+                </div>
+              </div>
+
+              <div id="chooseTargetPanel" style="display:none;margin-top:12px">
+                <div class="muted">Choose next target</div>
+                <div id="chooseList" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
+              </div>
+
+              <div id="gameOver" style="display:none;margin-top:12px">
+                <h3>Game Over</h3>
+                <div id="winnerText" class="muted"></div>
+              </div>
+            </div>
+
+          </div>
+
+          <div class="panel">
+            <h3>Your Cards</h3>
+            <div style="display:flex;gap:8px;margin-bottom:8px">
+              <input id="cardText" placeholder="Write a truth or dare" style="flex:1" />
+              <select id="cardType"><option value="truth">Truth</option><option value="dare">Dare</option></select>
+              <button id="addCardBtn" class="btn">Add</button>
+            </div>
+            <div id="yourCards" class="cards" style="max-height:320px;overflow:auto"></div>
+            <hr style="opacity:.06;margin:10px 0" />
+            <div class="muted" style="font-size:13px">Room colors</div>
+            <div style="height:40px;display:flex;gap:8px;align-items:center;margin-top:6px">
+              <div id="accentA" style="width:40px;border-radius:6px"></div>
+              <div id="accentB" style="width:40px;border-radius:6px"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <footer>Built with PeerJS cloud — open-source; save this file as index.html and host on GitHub Pages for easy sharing.</footer>
+  </div>
+
+  <!-- PeerJS CDN -->
+  <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+  <script>
+    /* SIMPLE ROOM PROTOCOL OVER PEERJS
+       - Host (creator) peerId acts as room id
+       - Host is authoritative and keeps room state
+       - messages: {type, payload}
+    */
+
+    // Utilities
+    const qs = sel => document.querySelector(sel);
+    const randColor = () => '#'+Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0');
+
+    // UI refs
+    const menu = qs('#menu'), roomUI = qs('#roomUI');
+    const nameInput = qs('#nameInput'), createBtn = qs('#createBtn'), joinBtn = qs('#joinBtn'), joinId = qs('#joinId');
+    const roomIdDisplay = qs('#roomIdDisplay'), youName = qs('#youName'), youId = qs('#youId');
+    const playersList = qs('#playersList'), yourCards = qs('#yourCards'), addCardBtn = qs('#addCardBtn'), cardText = qs('#cardText'), cardType = qs('#cardType');
+    const startRoundBtn = qs('#startRoundBtn'), roundDisplay = qs('#roundDisplay'), startRoundUI = qs('#turnInfo');
+    const turnInfo = qs('#turnInfo'), targetName = qs('#targetName'), timeLeft = qs('#timeLeft'), ringFill = qs('#ringFill');
+    const votePanel = qs('#votePanel'), voteYes = qs('#voteYes'), voteNo = qs('#voteNo');
+    const choosePanel = qs('#chooseTargetPanel'), chooseList = qs('#chooseList');
+    const roundsSelect = qs('#roundsSelect'), leaveBtn = qs('#leaveBtn');
+    const accentA = qs('#accentA'), accentB = qs('#accentB');
+    const gameOver = qs('#gameOver'), winnerText = qs('#winnerText');
+
+    // Peer & room state
+    let peer = null; // PeerJS peer
+    let connMap = {}; // peerId -> DataConnection (for host)
+    let isHost = false;
+    let localId = null;
+    let displayName = 'Player';
+
+    // host room state
+    let roomState = {
+      id: null,
+      players: {}, // peerId -> {name, cards:[], score:0, color}
+      round: 0,
+      maxRounds: 5,
+      currentTarget: null,
+      previousTarget: null,
+      status: 'lobby' // 'lobby'|'running'|'voting'|'choose'|'over'
+    };
+
+    // client-local view of state (mirrors host)
+    let clientState = null;
+
+    // TIMERS
+    let countdownTimer = null;
+    let countdownEnd = 0;
+
+    // --- Peer helpers ---
+    function makePeer() {
+      // Let PeerJS create an id for us (undefined), which will use cloud signalling.
+      peer = new Peer();
+      peer.on('open', id => {
+        localId = id;
+        youId.textContent = id;
+        console.log('peer open', id);
+      });
+
+      peer.on('connection', conn => {
+        // Only host should accept incoming conns.
+        if (!isHost) { conn.on('open',()=>conn.close()); return; }
+        setupConn(conn);
+      });
+
+      peer.on('error', err => console.error('Peer error', err));
+    }
+
+    function setupConn(conn) {
+      conn.on('data', data => handleMessage(conn.peer, data));
+      conn.on('open', ()=>{
+        connMap[conn.peer] = conn;
+        // if host, send current state to new peer
+        if (isHost) {
+          sendTo(conn, {type:'state', payload:roomState});
+        }
+      });
+      conn.on('close', ()=>{
+        delete connMap[conn.peer];
+        if (isHost) {
+          delete roomState.players[conn.peer];
+          broadcast({type:'state', payload:roomState});
+          renderPlayers();
+        }
+      });
+    }
+
+    function connectToHost(hostId) {
+      const c = peer.connect(hostId);
+      c.on('open', ()=>{
+        setupConn(c);
+        // announce join
+        sendTo(c,{type:'join', payload:{name:displayName}});
+      });
+      c.on('error', e=>console.error(e));
+    }
+
+    function sendTo(connOrPeerId, msg) {
+      if (typeof connOrPeerId === 'string') {
+        const c = connMap[connOrPeerId];
+        if (c && c.open) c.send(msg);
+        return;
+      }
+      // DataConnection
+      if (connOrPeerId && connOrPeerId.open) connOrPeerId.send(msg);
+    }
+
+    function broadcast(msg) {
+      // send to all connected clients (host role)
+      Object.values(connMap).forEach(c=>{ if (c.open) c.send(msg); });
+    }
+
+    // --- Message handling ---
+    function handleMessage(fromPeerId, msg) {
+      try {
+        const {type,payload} = msg;
+        if (isHost) return hostHandle(fromPeerId,type,payload);
+        return clientHandle(type,payload);
+      } catch(e){console.error('msg handle err',e)}
+    }
+
+    // Host-side message handling
+    function hostHandle(peerId,type,payload){
+      if (type==='join'){
+        // add player to room
+        roomState.players[peerId] = {name:payload.name,cards:[],score:0,color:randColor()};
+        broadcast({type:'state',payload:roomState});
+        renderPlayers();
+      } else if (type==='add_card'){
+        // player added a card
+        const card = {...payload.card, owner:peerId, id:Date.now()+Math.random()};
+        roomState.players[peerId].cards.push(card);
+        broadcast({type:'state',payload:roomState});
+        renderPlayers();
+      } else if (type==='start_turn'){
+        // only host should accept
+        roomState.status='running';
+        roomState.currentTarget = payload.targetId;
+        roomState.previousTarget = payload.previousTarget||roomState.previousTarget;
+        roomState.round = payload.round;
+        broadcast({type:'start_turn', payload:{targetId:roomState.currentTarget, endTime:payload.endTime}});
+        broadcast({type:'state',payload:roomState});
+      } else if (type==='vote'){
+        // collect votes attached under temporary votes map
+        roomState.votes = roomState.votes || {};
+        roomState.votes[peerId] = payload.vote;
+        // check if all players voted
+        const totalPlayers = Object.keys(roomState.players).length;
+        if (Object.keys(roomState.votes).length >= totalPlayers){
+          // tally
+          const yes = Object.values(roomState.votes).filter(Boolean).length;
+          const success = yes > (totalPlayers/2);
+          if (success){ roomState.players[roomState.currentTarget].score = (roomState.players[roomState.currentTarget].score||0) + 1; }
+          roomState.status='choose';
+          broadcast({type:'vote_result', payload:{success, votes:roomState.votes}});
+          broadcast({type:'state',payload:roomState});
+          roomState.votes = {};
+        }
+      } else if (type==='choose_target'){
+        // target chosen by current target
+        const newTarget = payload.newTarget;
+        // transfer one card from previousTarget (which is currentTarget before change) to newTarget
+        const prev = roomState.currentTarget;
+        if (prev && roomState.players[prev] && roomState.players[prev].cards.length>0){
+          const card = roomState.players[prev].cards.shift();
+          if (card) roomState.players[newTarget].cards.push(card);
+        }
+        roomState.previousTarget = prev;
+        roomState.currentTarget = newTarget;
+        // increment round
+        roomState.round = (roomState.round||0) + 1;
+        // check end
+        if (roomState.round >= roomState.maxRounds){
+          roomState.status='over';
+          // compute winner
+          let winner = null; let top= -1;
+          Object.entries(roomState.players).forEach(([pid,p])=>{ if (p.score>top){top=p.score; winner={id:pid,name:p.name,score:p.score}}});
+          broadcast({type:'game_over',payload:{winner}});
+          broadcast({type:'state',payload:roomState});
+          return;
+        }
+        roomState.status='running';
+        // start a new turn automatically with timer
+        const duration = 20; // seconds
+        const endTime = Date.now()+duration*1000;
+        broadcast({type:'start_turn', payload:{targetId:newTarget,endTime}});
+        broadcast({type:'state',payload:roomState});
+      }
+    }
+
+    // Client-side message handling
+    function clientHandle(type,payload){
+      if (type==='state'){
+        clientState = payload;
+        renderPlayers();
+        updateYourCards();
+        roundDisplay.textContent = (payload.round||0)+' / '+(payload.maxRounds||0);
+      } else if (type==='start_turn'){
+        // show timer to all clients
+        clientState = clientState||{};
+        clientState.currentTarget = payload.targetId;
+        startCountdown(payload.endTime);
+      } else if (type==='vote_result'){
+        // display result
+        const s = payload.success;
+        alert('Vote result: ' + (s? 'SUCCESS' : 'FAILED'));
+      } else if (type==='game_over'){
+        gameOver.style.display='block';
+        winnerText.textContent = payload.winner ? (payload.winner.name + ' wins with ' + payload.winner.score + ' points') : 'No winner';
+      }
+    }
+
+    // --- UI actions ---
+    createBtn.onclick = async ()=>{
+      displayName = nameInput.value || 'Player';
+      isHost = true;
+      makePeer();
+      // wait for id
+      const waitFor = ()=> new Promise(r=>{const t=setInterval(()=>{ if (localId){ clearInterval(t); r(); }},50)});
+      await waitFor();
+      roomState.id = localId;
+      roomState.maxRounds = parseInt(roundsSelect.value,10)||5;
+      roomState.players[localId] = {name:displayName,cards:[],score:0,color:randColor()};
+      // UI
+      menu.style.display='none'; roomUI.style.display='block';
+      roomIdDisplay.textContent = localId; youName.textContent = displayName; youId.textContent = localId;
+      // host accepts incoming
+      renderPlayers();
+    };
+
+    joinBtn.onclick = ()=>{
+      displayName = nameInput.value || 'Player';
+      isHost = false;
+      makePeer();
+      // connect to room
+      const id = joinId.value.trim(); if (!id) return alert('enter room id');
+      // wait open then connect
+      const waitFor = ()=> new Promise(r=>{const t=setInterval(()=>{ if (localId){ clearInterval(t); r(); }},50)});
+      waitFor().then(()=>{
+        connectToHost(id);
+        menu.style.display='none'; roomUI.style.display='block';
+        roomIdDisplay.textContent = id; youName.textContent = displayName; youId.textContent = localId;
+      });
+    };
+
+    addCardBtn.onclick = ()=>{
+      const text = cardText.value.trim(); if (!text) return;
+      const ct = cardType.value;
+      const card = {type:ct,text};
+      if (isHost){
+        // host just adds locally
+        roomState.players[localId].cards.push({...card, id:Date.now()+Math.random(), owner:localId});
+        broadcast({type:'state',payload:roomState});
+        renderPlayers(); updateYourCards();
+      } else {
+        // send to host
+        // find connection to host (the only conn)
+        const hostConn = Object.values(connMap)[0];
+        if (!hostConn) return alert('not connected to host');
+        sendTo(hostConn,{type:'add_card', payload:{card}});
+      }
+      cardText.value='';
+    };
+
+    startRoundBtn.onclick = ()=>{
+      if (!isHost) return alert('only host may start rounds');
+      if (!roomState) return;
+      // pick a target randomly
+      const pids = Object.keys(roomState.players);
+      if (pids.length < 2) return alert('need at least 2 players');
+      const target = pids[Math.floor(Math.random()*pids.length)];
+      const duration = 20; // seconds
+      const endTime = Date.now()+duration*1000;
+      roomState.round = (roomState.round||0)+1;
+      roomState.currentTarget = target;
+      roomState.status='running';
+      roomState.maxRounds = parseInt(roundsSelect.value,10)||roomState.maxRounds;
+      broadcast({type:'start_turn',payload:{targetId:target,endTime}});
+      broadcast({type:'state',payload:roomState});
+    };
+
+    leaveBtn.onclick = ()=>{
+      location.reload();
+    };
+
+    function renderPlayers(){
+      // host: use roomState, client: use clientState
+      const state = isHost ? roomState : clientState || {players:{}};
+      playersList.innerHTML='';
+      Object.entries(state.players||{}).forEach(([pid,p])=>{
+        const el = document.createElement('div'); el.className='player';
+        el.innerHTML = `<div class="swatch" style="background:${p.color}"></div><div style="flex:1"><div><strong>${p.name}</strong> <span class="muted">${pid===localId? '(you)':''}</span></div><div class="muted" style="font-size:12px">Score: ${p.score||0} · Cards: ${p.cards? p.cards.length:0}</div></div>`;
+        playersList.appendChild(el);
+      });
+      // show choose target when in choose state and you are current target
+      if (!isHost && clientState && clientState.status==='choose' && clientState.currentTarget===localId){
+        showChooseTargets(clientState.players);
+      }
+
+      // accents
+      if (state && state.id){ accentA.style.background = randColor(); accentB.style.background = randColor(); }
+    }
+
+    function updateYourCards(){
+      const state = isHost ? roomState : clientState || {players:{}};
+      const p = state.players[localId];
+      yourCards.innerHTML='';
+      if (!p) return;
+      (p.cards||[]).forEach(c=>{
+        const d = document.createElement('div'); d.className='card'; d.textContent = `(${c.type}) ${c.text}`; yourCards.appendChild(d);
+      });
+    }
+
+    // Countdown and vote UI
+    function startCountdown(endTime){
+      turnInfo.style.display='block'; votePanel.style.display='none'; choosePanel.style.display='none';
+      const update = ()=>{
+        const now = Date.now();
+        const sleft = Math.max(0, Math.ceil((endTime-now)/1000));
+        timeLeft.textContent = sleft;
+        const total = Math.max(1, Math.ceil((endTime - (endTime - 20000))/1000));
+        const pct = Math.max(0, Math.min(1,(endTime-now)/(20000)));
+        ringFill.style.boxShadow = `inset 0 0 0 ${Math.round(6 + (1-pct)*54)}px rgba(255,255,255,0.06)`;
+        if (now >= endTime){ clearInterval(countdownTimer); onCountdownComplete(); }
+      };
+      clearInterval(countdownTimer); countdownTimer = setInterval(update,200); update();
+    }
+
+    function onCountdownComplete(){
+      // show voting UI
+      votePanel.style.display='block';
+      // enable vote buttons
+      voteYes.disabled = voteNo.disabled = false;
+    }
+
+    voteYes.onclick = ()=>{ sendVote(true); voteYes.disabled = voteNo.disabled = true; };
+    voteNo.onclick = ()=>{ sendVote(false); voteYes.disabled = voteNo.disabled = true; };
+
+    function sendVote(v){
+      if (isHost){
+        // host handles votes locally
+        hostHandle(localId,'vote',{vote:v});
+      } else {
+        const hostConn = Object.values(connMap)[0]; if (!hostConn) return alert('not connected');
+        sendTo(hostConn,{type:'vote', payload:{vote:v}});
+      }
+    }
+
+    function showChooseTargets(players){
+      choosePanel.style.display='block'; chooseList.innerHTML='';
+      Object.entries(players||{}).forEach(([pid,p])=>{
+        if (pid===localId) return; // cannot choose self
+        const b = document.createElement('button'); b.className='btn'; b.textContent = p.name; b.onclick = ()=>{
+          if (isHost){ hostHandle(localId,'choose_target',{newTarget:pid}); }
+          else { const hostConn = Object.values(connMap)[0]; sendTo(hostConn,{type:'choose_target', payload:{newTarget:pid}}); }
+          choosePanel.style.display='none';
+        };
+        chooseList.appendChild(b);
+      });
+    }
+
+    // When acting as host, ensure local player is in connMap for convenience
+    // Also support host connecting to itself through roomState (no DataConnection)
+
+    // Peer initial setup: create peer early so localId exists even before create/join
+    makePeer();
+
+  </script>
+</body>
+</html>
