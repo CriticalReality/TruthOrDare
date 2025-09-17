@@ -31,6 +31,21 @@
     @media (max-width:900px){.room{grid-template-columns:1fr;}.panel{width:100%}}
     footer{opacity:.6;font-size:13px}
     button:disabled{opacity:0.5;cursor:not-allowed}
+
+    /* Circular avatars */
+    #circleArea{position:relative;height:320px;border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent);display:flex;align-items:center;justify-content:center}
+    .avatar{position:absolute;display:flex;flex-direction:column;align-items:center;gap:6px;width:84px}
+    .avatar .dot{width:56px;height:56px;border-radius:50%;display:inline-block;border:3px solid rgba(255,255,255,0.06);box-sizing:border-box}
+    .avatar .label{font-size:12px;text-align:center;width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #centerArrow{position:absolute;width:10px;height:120px;left:50%;top:50%;transform-origin:50% 80%;margin-left:-5px;margin-top:-60px;pointer-events:none}
+    #centerArrow .shaft{width:4px;height:70px;background:var(--fg);margin:0 auto;border-radius:3px;opacity:0.9}
+    #centerArrow .head{width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-top:18px solid var(--fg);margin-top:-4px;opacity:0.95}
+
+    /* Card display */
+    #cardDisplay{margin-top:12px;padding:12px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03);min-height:60px}
+    .modal{position:fixed;left:0;right:0;top:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center}
+    .modal .box{background:#0a0a0a;padding:16px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);width:420px;max-width:94%}
+    .small{font-size:13px}
   </style>
 </head>
 <body>
@@ -88,7 +103,17 @@
             </div>
 
             <div id="mainStage" style="margin-top:12px">
-              <div id="turnInfo" style="display:none">
+              <div id="circleArea">
+                <!-- avatars are injected here -->
+                <div id="centerArrow">
+                  <div class="shaft"></div>
+                  <div class="head"></div>
+                </div>
+              </div>
+
+              <div id="cardDisplay" style="display:none"></div>
+
+              <div id="turnInfo" style="display:none;margin-top:10px">
                 <div><strong>Target:</strong> <span id="targetName"></span></div>
                 <div style="margin-top:8px" class="timer">
                   <div class="ring"><div id="ringFill" class="fill"></div></div>
@@ -118,7 +143,7 @@
           </div>
 
           <div class="panel">
-            <h3>Your Cards</h3>
+            <h3 class="small">(Optional) Your Cards — unused in immediate gameplay</h3>
             <div style="display:flex;gap:8px;margin-bottom:8px">
               <input id="cardText" placeholder="Write a truth or dare" style="flex:1" />
               <select id="cardType"><option value="truth">Truth</option><option value="dare">Dare</option></select>
@@ -140,7 +165,7 @@
     <footer>Built with PeerJS cloud — open-source; save this file as index.html and host on GitHub Pages for easy sharing.</footer>
   </div>
 
-  <!-- PeerJS CDN (kept as in your original) -->
+  <!-- PeerJS CDN -->
   <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
   <script>
     /* --- utilities & UI refs --- */
@@ -158,6 +183,7 @@
     const roundsSelect = qs('#roundsSelect'), leaveBtn = qs('#leaveBtn');
     const accentA = qs('#accentA'), accentB = qs('#accentB');
     const gameOver = qs('#gameOver'), winnerText = qs('#winnerText');
+    const circleArea = qs('#circleArea'), centerArrow = qs('#centerArrow'), cardDisplay = qs('#cardDisplay');
 
     /* --- network & state --- */
     let peer = null;
@@ -173,7 +199,8 @@
       maxRounds: 5,
       currentTarget: null,
       previousTarget: null,
-      status: 'lobby' // 'lobby'|'running'|'voting'|'choose'|'over'
+      asker: null,
+      status: 'lobby' // 'lobby'|'awaiting_card'|'running'|'voting'|'choose'|'over'
     };
 
     let clientState = null;
@@ -183,7 +210,6 @@
     /* --- Peer helpers --- */
     function makePeer() {
       if (peer) return;
-      // create Peer with default options
       peer = new Peer();
 
       peer.on('open', id => {
@@ -192,25 +218,19 @@
         console.log('peer open', id);
       });
 
-      // host accepts incoming connections
       peer.on('connection', conn => {
-        // if not host, politely close
         if (!isHost) { conn.on('open', () => conn.close()); return; }
         setupConn(conn);
       });
 
-      peer.on('error', err => {
-        console.error('Peer error', err);
-        // display in console; could surface to user UI if desired
-      });
-
+      peer.on('error', err => console.error('Peer error', err));
       peer.on('disconnected', ()=> console.warn('peer disconnected'));
       peer.on('close', ()=> console.warn('peer closed'));
     }
 
     function setupConn(conn) {
       conn.on('data', data => handleMessage(conn.peer, data));
-      conn.on('open', ()=>{
+      conn.on('open', ()=> {
         connMap[conn.peer] = conn;
         // send state to new client immediately
         if (isHost) {
@@ -218,14 +238,13 @@
           renderPlayers();
         }
       });
-      conn.on('close', ()=>{
+      conn.on('close', ()=> {
         delete connMap[conn.peer];
         if (isHost) {
-          // remove from room
           delete roomState.players[conn.peer];
-          // if current or previous target removed, clear them safely
           if (roomState.currentTarget === conn.peer) roomState.currentTarget = null;
           if (roomState.previousTarget === conn.peer) roomState.previousTarget = null;
+          if (roomState.asker === conn.peer) roomState.asker = null;
           broadcast({type:'state', payload:roomState});
           renderPlayers();
         }
@@ -236,27 +255,23 @@
     function connectToHost(hostId) {
       if (!peer || !localId) return alert('peer not ready yet');
       const c = peer.connect(hostId, {reliable:true});
-      c.on('open', ()=>{
+      c.on('open', ()=> {
         setupConn(c);
-        // announce join
         sendTo(c,{type:'join', payload:{name:displayName}});
       });
       c.on('error', e=>console.error('connect error', e));
     }
 
     function sendTo(connOrPeerId, msg) {
-      // if string, treat as peerId -> connection map lookup
       if (typeof connOrPeerId === 'string') {
         const c = connMap[connOrPeerId];
         if (c && c.open) c.send(msg);
         return;
       }
-      // DataConnection object
       if (connOrPeerId && connOrPeerId.open) connOrPeerId.send(msg);
     }
 
     function broadcast(msg) {
-      // host only
       Object.values(connMap).forEach(c => { if (c.open) c.send(msg); });
     }
 
@@ -272,10 +287,8 @@
     /* Host-side handlers */
     function hostHandle(peerId, type, payload){
       if (type === 'join') {
-        // add player
         if (!roomState.players[peerId]) {
           roomState.players[peerId] = { name: payload.name || 'Player', cards: [], score: 0, color: randColor() };
-          // send updated state to all
           broadcast({type:'state', payload:roomState});
           renderPlayers();
         }
@@ -287,14 +300,22 @@
           renderPlayers();
         }
       } else if (type === 'start_turn') {
-        // start turn came from host UI or a client request; but only host executes authoritative start
-        const duration = payload.duration || 20;
+        // choose asker & target were chosen at host action; this message may not be used by clients to start timer
+        // KEEP for backward compat if clients send start_turn
+      } else if (type === 'present_card') {
+        // asker presented a card
+        const card = {...payload.card, id: Date.now()+Math.random(), asker: peerId, targetId: payload.targetId};
+        roomState.lastCard = card;
         roomState.status = 'running';
-        roomState.currentTarget = payload.targetId;
-        roomState.round = payload.round || roomState.round;
+        const duration = payload.duration || 20;
         const endTime = Date.now() + duration*1000;
-        broadcast({type:'start_turn', payload:{targetId: roomState.currentTarget, endTime, duration}});
+        // broadcast the card and start timer
+        broadcast({type:'card_presented', payload:{card, targetId: card.targetId}});
+        broadcast({type:'start_timer', payload:{endTime, duration, targetId: card.targetId}});
         broadcast({type:'state', payload:roomState});
+        // also process locally on host UI
+        clientHandle('card_presented', {card, targetId: card.targetId});
+        clientHandle('start_timer', {endTime, duration, targetId: card.targetId});
       } else if (type === 'vote') {
         roomState.votes = roomState.votes || {};
         roomState.votes[peerId] = payload.vote;
@@ -313,28 +334,30 @@
       } else if (type === 'choose_target') {
         const newTarget = payload.newTarget;
         const prev = roomState.currentTarget;
-        if (prev && roomState.players[prev] && roomState.players[prev].cards && roomState.players[prev].cards.length > 0) {
-          const card = roomState.players[prev].cards.shift();
-          if (card && roomState.players[newTarget]) roomState.players[newTarget].cards.push(card);
-        }
         roomState.previousTarget = prev;
         roomState.currentTarget = newTarget;
+        roomState.asker = null;
         roomState.round = (roomState.round || 0) + 1;
-        // check end condition
+        // end condition
         if (roomState.round >= roomState.maxRounds) {
           roomState.status = 'over';
-          // compute winner
           let winner = null; let top = -1;
           Object.entries(roomState.players).forEach(([pid,p]) => { if ((p.score||0) > top) { top = p.score; winner = {id: pid, name: p.name, score: p.score}; }});
           broadcast({type:'game_over', payload:{winner}});
           broadcast({type:'state', payload:roomState});
           return;
         }
-        roomState.status = 'running';
-        const duration = 20;
-        const endTime = Date.now() + duration*1000;
-        broadcast({type:'start_turn', payload:{targetId: newTarget, endTime, duration}});
+        // pick next asker (anyone except target)
+        const pids = Object.keys(roomState.players || {});
+        let askerChoices = pids.filter(id => id !== roomState.currentTarget);
+        if (askerChoices.length === 0) askerChoices = pids;
+        const nextAsker = askerChoices[Math.floor(Math.random()*askerChoices.length)];
+        roomState.asker = nextAsker;
+        roomState.status = 'awaiting_card';
+        broadcast({type:'start_turn', payload:{targetId: roomState.currentTarget, askerId: nextAsker, round: roomState.round}});
         broadcast({type:'state', payload:roomState});
+        // also notify host UI locally
+        clientHandle('start_turn', {targetId: roomState.currentTarget, askerId: nextAsker, round: roomState.round});
       }
     }
 
@@ -342,20 +365,41 @@
     function clientHandle(type, payload, fromPeerId) {
       if (type === 'state') {
         clientState = payload;
-        // sync UI
         renderPlayers();
         updateYourCards();
         roundDisplay.textContent = (payload.round || 0) + ' / ' + (payload.maxRounds || 0);
-        // update accents to stable colors (take first two players or stored colors)
         const players = payload.players || {};
         const colors = Object.values(players).map(p => p.color).filter(Boolean);
         accentA.style.background = colors[0] || '#444';
         accentB.style.background = colors[1] || '#666';
+        // render arrow and circle immediately
+        renderCirclePlayers(players, payload.currentTarget);
       } else if (type === 'start_turn') {
         clientState = clientState || {};
         clientState.currentTarget = payload.targetId;
-        // set nice label for target
+        clientState.asker = payload.askerId || clientState.asker || null;
+        // set label for target
         const tPlayers = clientState.players || {};
+        const label = (tPlayers[payload.targetId] && tPlayers[payload.targetId].name) || (payload.targetId === localId ? 'You' : payload.targetId);
+        targetName.textContent = label;
+        // update circle arrow
+        renderCirclePlayers(clientState.players || {}, payload.targetId);
+        // if I'm the asker, prompt for a truth/dare now
+        if (payload.askerId === localId) {
+          showCardInput(payload.targetId);
+        } else {
+          // waiting state: clear card display and show waiting message if not target
+          cardDisplay.style.display = 'none';
+          turnInfo.style.display = 'none';
+          votePanel.style.display = 'none';
+        }
+      } else if (type === 'card_presented') {
+        // show card to all players immediately
+        const card = payload.card;
+        showPresentedCard(card);
+      } else if (type === 'start_timer') {
+        // only start timer for everyone (display target info, etc)
+        const tPlayers = clientState && clientState.players || {};
         const label = (tPlayers[payload.targetId] && tPlayers[payload.targetId].name) || (payload.targetId === localId ? 'You' : payload.targetId);
         targetName.textContent = label;
         startCountdown(payload.endTime, payload.duration || 20);
@@ -373,17 +417,16 @@
       displayName = nameInput.value.trim() || 'Player';
       isHost = true;
       makePeer();
-      // wait for id to be available
       await waitForLocalId();
       roomState.id = localId;
       roomState.maxRounds = parseInt(roundsSelect.value, 10) || 5;
       roomState.players[localId] = { name: displayName, cards: [], score: 0, color: randColor() };
 
-      // show UI
       menu.style.display = 'none'; roomUI.style.display = 'block';
       roomIdDisplay.textContent = localId; youName.textContent = displayName; youId.textContent = localId;
       renderPlayers();
-      // host does not need a DataConnection to self; state is already set
+      // host local state should be pushed to itself as well
+      // (no DataConnection required for self)
     };
 
     joinBtn.onclick = ()=> {
@@ -425,23 +468,29 @@
       if (!isHost) return alert('only host may start rounds');
       const pids = Object.keys(roomState.players || {});
       if (pids.length < 2) return alert('need at least 2 players');
-      // choose a target that is not last target if possible
+      // pick target & asker
       let choices = pids.filter(id => id !== roomState.previousTarget);
       if (choices.length === 0) choices = pids;
       const target = choices[Math.floor(Math.random()*choices.length)];
-      const duration = 20;
+      // pick asker (anyone except target)
+      let askerChoices = pids.filter(id => id !== target);
+      if (askerChoices.length === 0) askerChoices = pids;
+      const asker = askerChoices[Math.floor(Math.random()*askerChoices.length)];
+
       roomState.round = (roomState.round || 0) + 1;
       roomState.currentTarget = target;
-      roomState.status = 'running';
+      roomState.asker = asker;
+      roomState.status = 'awaiting_card';
       roomState.maxRounds = parseInt(roundsSelect.value,10) || roomState.maxRounds;
-      const endTime = Date.now() + duration*1000;
-      broadcast({type:'start_turn', payload:{targetId: target, endTime, duration, round: roomState.round}});
-      broadcast({type:'state', payload:roomState});
+
+      // broadcast start_turn (awaiting card)
+      broadcast({type:'start_turn', payload:{targetId: target, askerId: asker, round: roomState.round}});
+      broadcast({type:'state', payload: roomState});
+      // also notify host client UI directly
+      clientHandle('start_turn', {targetId: target, askerId: asker, round: roomState.round});
     };
 
-    leaveBtn.onclick = ()=> {
-      location.reload();
-    };
+    leaveBtn.onclick = ()=> { location.reload(); };
 
     /* --- rendering --- */
     function renderPlayers() {
@@ -462,10 +511,13 @@
         choosePanel.style.display = 'none';
       }
 
-      // stable accents (use first two players colors if available)
       const colors = Object.values(state.players || {}).map(p => p.color).filter(Boolean);
       accentA.style.background = colors[0] || '#333';
       accentB.style.background = colors[1] || '#555';
+
+      // update circle visuals
+      const players = state.players || {};
+      renderCirclePlayers(players, state.currentTarget);
     }
 
     function updateYourCards() {
@@ -483,10 +535,6 @@
       turnInfo.style.display = 'block';
       votePanel.style.display = 'none';
       choosePanel.style.display = 'none';
-      // set label for target if we have players info
-      const label = (clientState && clientState.players && clientState.players[ (clientState.currentTarget || '') ] && clientState.players[clientState.currentTarget].name) || (isHost && roomState.players && roomState.players[roomState.currentTarget] && roomState.players[roomState.currentTarget].name) || '';
-      if (label) targetName.textContent = label;
-
       if (countdownTimer) clearInterval(countdownTimer);
       const start = Date.now();
       const totalMs = Math.max(1000, (endTime - start) > 0 ? (endTime - start) : duration*1000);
@@ -496,7 +544,6 @@
         const sleft = Math.ceil(leftMs / 1000);
         timeLeft.textContent = sleft;
         const pct = Math.max(0, Math.min(1, leftMs / totalMs));
-        // thickness visual mapping
         ringFill.style.boxShadow = `inset 0 0 0 ${Math.round(6 + (1-pct)*54)}px rgba(255,255,255,0.06)`;
         if (now >= endTime) {
           clearInterval(countdownTimer);
@@ -543,6 +590,78 @@
         };
         chooseList.appendChild(b);
       });
+    }
+
+    /* --- card input (asker) --- */
+    function showCardInput(targetId) {
+      // build modal
+      const modal = document.createElement('div'); modal.className = 'modal';
+      const box = document.createElement('div'); box.className = 'box';
+      box.innerHTML = `<div><strong>It's your turn to ask</strong></div>
+        <div class="muted small" style="margin-top:6px">Target: <strong>${(clientState && clientState.players && clientState.players[targetId] && clientState.players[targetId].name) || targetId}</strong></div>
+        <div style="margin-top:10px"><input id="askText" placeholder="Enter a truth or a dare" style="width:100%;padding:8px;border-radius:6px;background:#111;border:1px solid #333;color:var(--fg)"></div>
+        <div style="margin-top:8px;display:flex;gap:8px"><select id="askType"><option value="truth">Truth</option><option value="dare">Dare</option></select><div style="flex:1"></div><button id="sendAsk" class="btn">Send</button></div>
+        <div style="margin-top:8px" class="muted small">When you send, the card appears to everyone and the timer starts.</div>`;
+      modal.appendChild(box);
+      document.body.appendChild(modal);
+      const sendBtn = box.querySelector('#sendAsk');
+      sendBtn.onclick = ()=> {
+        const t = box.querySelector('#askText').value.trim();
+        const tp = box.querySelector('#askType').value;
+        if (!t) return alert('enter something');
+        const card = {type:tp, text:t};
+        // send to host
+        if (isHost) {
+          // host can call hostHandle directly as asker (localId)
+          hostHandle(localId, 'present_card', {card, targetId});
+        } else {
+          const hostConn = Object.values(connMap)[0]; if (!hostConn) return alert('not connected');
+          sendTo(hostConn, {type:'present_card', payload:{card, targetId}});
+        }
+        document.body.removeChild(modal);
+      };
+    }
+
+    /* --- card display --- */
+    function showPresentedCard(card) {
+      cardDisplay.style.display = 'block';
+      cardDisplay.innerHTML = `<div style="font-size:13px" class="muted small">From: <strong>${(clientState && clientState.players && clientState.players[card.asker] && clientState.players[card.asker].name) || card.asker}</strong> · To: <strong>${(clientState && clientState.players && clientState.players[card.targetId] && clientState.players[card.targetId].name) || card.targetId}</strong></div>
+        <div style="margin-top:8px;font-size:16px"><strong>(${card.type.toUpperCase()})</strong> ${card.text}</div>`;
+    }
+
+    /* --- circle avatar render & arrow --- */
+    function renderCirclePlayers(players, currentTarget) {
+      // clear avatars
+      circleArea.querySelectorAll('.avatar').forEach(n => n.remove());
+      const entries = Object.entries(players || {});
+      const n = entries.length;
+      if (n === 0) return;
+      const radius = 110;
+      entries.forEach(([pid,p], idx) => {
+        const angle = (idx / n) * Math.PI * 2 - Math.PI/2; // start top
+        const x = Math.cos(angle) * radius;
+        const y = Math.sin(angle) * radius;
+        const el = document.createElement('div'); el.className = 'avatar';
+        el.style.left = `calc(50% + ${x}px - 42px)`; // offset half width (84/2)
+        el.style.top = `calc(50% + ${y}px - 42px)`;
+        el.innerHTML = `<div class="dot" style="background:${p.color}"></div><div class="label">${p.name}${pid===localId? ' (you)':''}</div>`;
+        if (pid === currentTarget) {
+          el.querySelector('.dot').style.boxShadow = '0 0 0 4px rgba(255,255,255,0.04), 0 0 14px rgba(255,255,255,0.03)';
+        }
+        circleArea.appendChild(el);
+      });
+
+      // point arrow toward currentTarget
+      if (currentTarget && players[currentTarget]) {
+        const idx = entries.findIndex(([pid])=> pid === currentTarget);
+        if (idx >= 0) {
+          const angleDeg = (idx / n) * 360;
+          centerArrow.style.transform = `translate(-50%,-50%) rotate(${angleDeg}deg)`;
+          centerArrow.style.display = 'block';
+          return;
+        }
+      }
+      centerArrow.style.display = 'none';
     }
 
     // create peer at load so id is ready quickly
