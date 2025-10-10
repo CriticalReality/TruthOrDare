@@ -1,8 +1,9 @@
-/* script.js — Abide minimal video app */
+/* script.js — Abide minimal video app (fixed) */
 
 const CLIENT_ID = "274592201441-l24f0rputob0op3flog6gsbjp2lls6cr.apps.googleusercontent.com";
+// include OpenID scopes so userinfo endpoint accepts the token
 const DRIVE_SCOPE =
-  "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly";
+  "openid email profile https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly";
 
 let tokenClient;
 let accessToken = null;
@@ -33,39 +34,96 @@ function initTokenClient() {
     client_id: CLIENT_ID,
     scope: DRIVE_SCOPE,
     callback: (resp) => {
-      if (resp.error) {
-        console.error("Token error", resp);
-        alert("Failed to get token: " + resp.error);
+      // standardized handling for both initial grant and refresh
+      if (!resp) {
+        console.error("Empty token response");
         return;
       }
+      if (resp.error) {
+        console.error("Token error", resp);
+        // surface to UI minimally
+        alert("Failed to get token: " + (resp.error_description || resp.error));
+        return;
+      }
+      if (!resp.access_token) {
+        console.error("No access_token in response", resp);
+        alert("Authentication did not return an access token.");
+        return;
+      }
+
       accessToken = resp.access_token;
-      tokenExpiresAt = Date.now() + 55 * 60 * 1000; // roughly 55 min lifetime
-      onSignInSuccess();
+      // use expires_in if provided for accurate expiry time
+      const expiresIn = typeof resp.expires_in === "number" ? resp.expires_in : 55 * 60;
+      tokenExpiresAt = Date.now() + (expiresIn - 30) * 1000; // subtract small buffer
+      // if this was the interactive login, run post-sign-in flow
+      // (the code which triggers interactive request uses prompt: "consent")
+      if (document.visibilityState !== undefined) {
+        onSignInSuccess().catch((e) => console.error("post sign-in error", e));
+      }
     },
   });
 }
 
 async function ensureAccessToken() {
-  if (!accessToken || Date.now() > tokenExpiresAt - 30 * 1000) {
-    return new Promise((resolve) => {
-      tokenClient.callback = (resp) => {
-        accessToken = resp.access_token;
-        tokenExpiresAt = Date.now() + 55 * 60 * 1000;
-        resolve();
-      };
-      tokenClient.requestAccessToken({ prompt: "" }); // silent refresh
-    });
-  }
+  // if token is present and not expiring in the next 30s, keep it
+  if (accessToken && Date.now() < tokenExpiresAt - 30 * 1000) return;
+
+  if (!tokenClient) initTokenClient();
+
+  return new Promise((resolve, reject) => {
+    // replace callback temporarily to capture the response for this refresh request
+    const prevCallback = tokenClient.callback;
+    let resolved = false;
+    tokenClient.callback = (resp) => {
+      if (!resp) {
+        tokenClient.callback = prevCallback;
+        return reject(new Error("Empty token response"));
+      }
+      if (resp.error) {
+        tokenClient.callback = prevCallback;
+        return reject(new Error(resp.error_description || resp.error));
+      }
+      if (!resp.access_token) {
+        tokenClient.callback = prevCallback;
+        return reject(new Error("No access token returned"));
+      }
+      accessToken = resp.access_token;
+      const expiresIn = typeof resp.expires_in === "number" ? resp.expires_in : 55 * 60;
+      tokenExpiresAt = Date.now() + (expiresIn - 30) * 1000;
+      tokenClient.callback = prevCallback;
+      resolved = true;
+      resolve();
+    };
+
+    try {
+      // silent refresh — empty prompt attempts to reuse existing consent
+      tokenClient.requestAccessToken({ prompt: "" });
+      // If the provider can't do silent refresh, the callback will be invoked with error
+    } catch (err) {
+      tokenClient.callback = prevCallback;
+      reject(err);
+    }
+
+    // safety timeout in case provider never responds
+    setTimeout(() => {
+      if (!resolved) {
+        tokenClient.callback = prevCallback;
+        reject(new Error("Timed out while obtaining access token"));
+      }
+    }, 15000);
+  });
 }
 
 /* ---------- Event listeners ---------- */
 googleBtn.addEventListener("click", () => {
   if (!tokenClient) initTokenClient();
+  // interactive request for consent to ensure openid/email/profile included
   tokenClient.requestAccessToken({ prompt: "consent" });
 });
 
 signoutBtn.addEventListener("click", () => {
   if (accessToken) {
+    // revoke in background; ignore errors
     fetch(`https://oauth2.googleapis.com/revoke?token=${accessToken}`, { method: "POST" }).catch(() => {});
   }
   accessToken = null;
@@ -85,35 +143,56 @@ async function onSignInSuccess() {
   feedSection.classList.remove("hidden");
   signedArea.classList.remove("hidden");
 
+  // fetch userinfo — token must have openid/email/profile
   try {
-    const info = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+    await ensureAccessToken();
+    const infoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (info.ok) {
-      const tokenInfo = await info.json();
+    if (infoRes.ok) {
+      const tokenInfo = await infoRes.json();
       userEmailSpan.textContent = tokenInfo.email || tokenInfo.sub || "(signed in)";
     } else {
-      console.warn("userinfo fetch failed", info.status);
+      console.warn("userinfo fetch failed", infoRes.status);
       userEmailSpan.textContent = "(signed in)";
     }
-  } catch {
+  } catch (err) {
+    console.warn("userinfo fetch error", err);
     userEmailSpan.textContent = "(signed in)";
   }
 
+  // create / ensure abide folder exists and then load feed
   abideFolderId = await ensureAbideFolder();
   await refreshFeed();
 }
 
 /* ---------- Drive helpers ---------- */
 async function driveFetch(path, method = "GET", body = null, headers = {}) {
+  // one automatic retry on 401: clear token and try to re-acquire
   await ensureAccessToken();
-  const res = await fetch(`https://www.googleapis.com/drive/v3${path}`, {
+  let res = await fetch(`https://www.googleapis.com/drive/v3${path}`, {
     method,
     headers: { Authorization: `Bearer ${accessToken}`, ...headers },
     body,
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  if (res.status === 401) {
+    // token might be expired/invalid; reset and try refreshing once
+    accessToken = null;
+    await ensureAccessToken();
+    res = await fetch(`https://www.googleapis.com/drive/v3${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${accessToken}`, ...headers },
+      body,
+    });
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Drive API error: ${res.status}`);
+  }
+  // many drive endpoints return JSON
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) return res.json();
+  return res.text();
 }
 
 async function ensureAbideFolder() {
@@ -121,7 +200,7 @@ async function ensureAbideFolder() {
   const q = encodeURIComponent(
     "name = 'abide' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
   );
-  const res = await driveFetch(`/files?q=${q}&spaces=drive&fields=files(id,name)`);
+  const res = await driveFetch(`/files?q=${q}&spaces=drive&fields=files(id,name)&pageSize=1`);
   if (res.files?.length) return res.files[0].id;
 
   const create = await driveFetch(
@@ -149,28 +228,26 @@ uploadBtn.addEventListener("click", async () => {
         description: JSON.stringify({ tags: tags.split(",").map((t) => t.trim()) }),
       });
     }
-    uploadStatus.textContent = "Upload complete ✨";
+    uploadStatus.textContent = "Upload complete";
     fileInput.value = "";
     tagsInput.value = "";
     await refreshFeed();
   } catch (err) {
     console.error(err);
-    uploadStatus.textContent = "Upload failed: " + err.message;
+    uploadStatus.textContent = "Upload failed: " + (err.message || err);
   }
 });
 
 async function uploadFileToAbide(file) {
   await ensureAccessToken();
+  if (!abideFolderId) await ensureAbideFolder();
   const metadata = {
     name: file.name,
     mimeType: file.type || "video/mp4",
     parents: [abideFolderId],
   };
   const form = new FormData();
-  form.append(
-    "metadata",
-    new Blob([JSON.stringify(metadata)], { type: "application/json" })
-  );
+  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
   form.append("file", file);
   const res = await fetch(
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",
@@ -204,7 +281,7 @@ async function listAbideVideos() {
   const q = encodeURIComponent(
     `'${abideFolderId}' in parents and mimeType contains 'video/' and trashed = false`
   );
-  const url = `/files?q=${q}&spaces=drive&fields=files(id,name,description,webViewLink,owners)&orderBy=createdTime desc&pageSize=100`;
+  const url = `/files?q=${q}&spaces=drive&fields=files(id,name,description,webViewLink,webContentLink,owners)&orderBy=createdTime desc&pageSize=100`;
   const res = await driveFetch(url);
   return res.files || [];
 }
@@ -222,7 +299,11 @@ async function refreshFeed(filterTag = null) {
           if (parsed?.tags) tags = parsed.tags;
         }
       } catch {}
-      const streamUrl = `https://drive.google.com/uc?export=preview&id=${f.id}`;
+      // Prefer public webContent or webView link if available, otherwise use uc?export=preview (works only for public files)
+      let streamUrl = null;
+      if (f.webContentLink) streamUrl = f.webContentLink;
+      else if (f.webViewLink) streamUrl = f.webViewLink;
+      else streamUrl = `https://drive.google.com/uc?export=preview&id=${f.id}`;
       return { id: f.id, name: f.name, streamUrl, tags };
     });
 
@@ -242,6 +323,7 @@ async function refreshFeed(filterTag = null) {
     filtered.forEach((it) => {
       const card = document.createElement("div");
       card.className = "video-card";
+      // use iframe for drive preview links; if embedding private files you'll need server-side proxy or public ACL
       const vid = document.createElement("iframe");
       vid.src = it.streamUrl;
       vid.allow = "autoplay; encrypted-media";
