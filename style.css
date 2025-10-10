@@ -1,0 +1,75 @@
+:root{
+  --bg: #0f0f10;
+  --panel: #141416;
+  --muted: #9a9a9a;
+  --accent: #202020;
+  --white: #f7f7f7;
+  --glass: rgba(255,255,255,0.03);
+}
+
+*{box-sizing:border-box}
+html,body,#app{height:100%;margin:0;padding:0;background:var(--bg);color:var(--white);font-family:Inter,Segoe UI,Helvetica,Arial,sans-serif}
+
+.topbar{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-bottom:1px solid rgba(255,255,255,0.03)}
+.logo{font-weight:700;font-size:18px}
+.signed-area{display:flex;align-items:center;gap:10px}
+.btn{background:var(--accent);border:1px solid rgba(255,255,255,0.03);color:var(--white);padding:8px 10px;border-radius:8px;cursor:pointer}
+.btn.primary{background:#2a2a2a}
+.btn.small{padding:6px 8px;font-size:13px}
+
+main{padding:18px;max-width:900px;margin:0 auto}
+.panel{background:var(--panel);padding:18px;border-radius:10px;margin-bottom:16px;border:1px solid rgba(255,255,255,0.03)}
+.center{text-align:center}
+.controls{display:flex;gap:8px;justify-content:center;margin-top:12px}
+.note{color:var(--muted);margin-top:10px}
+
+.upload-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.upload-row input[type="file"]{background:var(--glass);padding:8px;border-radius:8px;color:var(--white)}
+.upload-row input[type="text"], .upload-row input[type="file"], .upload-row input[type="email"]{border:1px solid rgba(255,255,255,0.03);background:transparent;padding:8px;border-radius:8px;color:var(--white)}
+.checkbox-inline{display:flex;align-items:center;gap:6px;color:var(--muted)}
+
+.muted{color:var(--muted);font-size:13px}
+
+.filters{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+.filters input{flex:1;padding:8px;border-radius:8px;background:transparent;border:1px solid rgba(255,255,255,0.03);color:var(--white)}
+
+.video-feed{
+  height:70vh;
+  border-radius:8px;
+  overflow-y:scroll;
+  scroll-snap-type: y mandatory;
+  background: #000;
+  padding:0;
+}
+
+.video-card{
+  height:70vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  scroll-snap-align:start;
+  border-bottom:1px solid rgba(255,255,255,0.02);
+  position:relative;
+  background: #000;
+  padding:12px;
+}
+
+.video-card video{
+  max-height:92%;
+  max-width:100%;
+  border-radius:8px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+}
+
+.video-meta{
+  position:absolute;
+  left:16px;
+  bottom:16px;
+  color:var(--muted);
+  font-size:13px;
+  backdrop-filter: blur(6px);
+}
+
+.hidden{display:none}
+
+footer.footer{padding:14px;text-align:center;color:var(--muted);font-size:13px}

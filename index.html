@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Abide - MiniVine (Drive-backed POC)</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Google Identity Services (for OAuth token client) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="logo">Abide</div>
+      <div id="signed-area" class="signed-area hidden">
+        <span id="user-email" class="user-email"></span>
+        <button id="signout-btn" class="btn">Sign out</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="auth-section" class="panel center">
+        <h1>Abide — Shorts (POC)</h1>
+        <p>Sign in with Google to use your Google Drive as storage. Videos placed in your <code>/abide/</code> folder will be discoverable here (if you share them).</p>
+        <div class="controls">
+          <button id="google-signin" class="btn primary">Sign in with Google</button>
+        </div>
+        <div class="note">This is a proof-of-concept. Only use for testing.</div>
+      </section>
+
+      <section id="upload-section" class="panel hidden">
+        <h2>Your Abide Uploads</h2>
+        <div class="upload-row">
+          <input id="file-input" type="file" accept="video/*" />
+          <input id="tags-input" placeholder="Tags, comma separated (e.g. #minecraft,#gaming)" />
+          <label class="checkbox-inline"><input id="public-checkbox" type="checkbox" /> Make public (anyone with link)</label>
+          <button id="upload-btn" class="btn">Upload to /abide/</button>
+        </div>
+        <div id="upload-status" class="muted"></div>
+      </section>
+
+      <section id="feed-section" class="panel hidden">
+        <div id="filters" class="filters">
+          <input id="filter-tag" placeholder="Filter by tag (#minecraft)" />
+          <button id="apply-filter" class="btn small">Apply</button>
+          <button id="clear-filter" class="btn small">Clear</button>
+        </div>
+
+        <div id="video-feed" class="video-feed"></div>
+      </section>
+    </main>
+
+    <footer class="footer muted">
+      Built for PoC. See README for setup. No server required; uses Google Drive API.
+    </footer>
+  </div>
+
+  <script type="module" src="script.js"></script>
+</body>
+</html>
