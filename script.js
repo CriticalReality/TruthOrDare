@@ -8,7 +8,7 @@
    - Replace PLACEHOLDER_CLIENT_ID with your Google OAuth client ID (see README)
 */
 
-const CLIENT_ID = "PLACEHOLDER_CLIENT_ID.apps.googleusercontent.com"; // <-- replace
+const CLIENT_ID = "274592201441-l24f0rputob0op3flog6gsbjp2lls6cr.apps.googleusercontent.com"; // insetered
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly";
 let tokenClient;
 let accessToken = null;
@@ -344,3 +344,4 @@ window.addEventListener('load', () => {
     console.warn("Token client not ready yet; will init when user clicks sign in.");
   }
 });
+
