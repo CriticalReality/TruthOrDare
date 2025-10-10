@@ -155,6 +155,18 @@ uploadBtn.addEventListener("click", async () => {
     uploadStatus.textContent = "Upload failed: " + (err.message || err);
   }
 });
+// Make uploaded video public (viewable by anyone with the link)
+await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    role: 'reader',
+    type: 'anyone'
+  })
+});
 
 /* multipart upload: metadata + file */
 async function uploadFileToAbide(file) {
@@ -344,4 +356,5 @@ window.addEventListener('load', () => {
     console.warn("Token client not ready yet; will init when user clicks sign in.");
   }
 });
+
 
