@@ -9,8 +9,23 @@
   #ui{position:fixed;left:12px;top:12px;z-index:30;color:#fff;font-weight:600;text-shadow:0 1px 0 rgba(0,0,0,.6)}
   #hud{display:flex;gap:12px;align-items:center}
   .stat{background:rgba(0,0,0,.45);padding:8px 10px;border-radius:6px;font-size:14px}
-  #touch-controls{position:fixed;right:12px;bottom:12px;z-index:30;display:flex;gap:6px}
+  #touch-controls{
+    position:fixed;
+    right:12px;
+    bottom:12px;
+    z-index:30;
+    display:grid;
+    grid-template-areas:
+      ". up ."
+      "left . right"
+      ". down .";
+    gap:6px;
+  }
   .btn{width:56px;height:56px;border-radius:8px;background:rgba(0,0,0,.4);display:grid;place-items:center;color:#fff;font-weight:700}
+  #up{grid-area:up}
+  #down{grid-area:down}
+  #left{grid-area:left}
+  #right{grid-area:right}
   canvas{display:block}
   #message{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:50;background:rgba(0,0,0,.75);padding:20px;border-radius:8px;color:#fff;font-size:18px;display:none}
 </style>
@@ -26,10 +41,8 @@
 </div>
 <div id="touch-controls">
   <div class="btn" id="up">▲</div>
-  <div style="display:flex;flex-direction:column;gap:6px">
-    <div class="btn" id="left">◀</div>
-    <div class="btn" id="right">▶</div>
-  </div>
+  <div class="btn" id="left">◀</div>
+  <div class="btn" id="right">▶</div>
   <div class="btn" id="down">▼</div>
 </div>
 <canvas id="c"></canvas>
@@ -242,4 +255,3 @@ window._game = {state, newLevel, tryMove};
 </script>
 </body>
 </html>
-
