@@ -1,60 +1,244 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Abide - MiniVine (Drive-backed POC)</title>
-  <link rel="stylesheet" href="style.css" />
-  <!-- Google Identity Services (for OAuth token client) -->
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Procedural Maze Escape</title>
+<style>
+  html,body{height:100%;margin:0;background:#111;overflow:hidden;font-family:system-ui,Segoe UI,Roboto,Arial}
+  #ui{position:fixed;left:12px;top:12px;z-index:30;color:#fff;font-weight:600;text-shadow:0 1px 0 rgba(0,0,0,.6)}
+  #hud{display:flex;gap:12px;align-items:center}
+  .stat{background:rgba(0,0,0,.45);padding:8px 10px;border-radius:6px;font-size:14px}
+  #touch-controls{position:fixed;right:12px;bottom:12px;z-index:30;display:flex;gap:6px}
+  .btn{width:56px;height:56px;border-radius:8px;background:rgba(0,0,0,.4);display:grid;place-items:center;color:#fff;font-weight:700}
+  canvas{display:block}
+  #message{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:50;background:rgba(0,0,0,.75);padding:20px;border-radius:8px;color:#fff;font-size:18px;display:none}
+</style>
 </head>
 <body>
-  <div id="app">
-    <header class="topbar">
-      <div class="logo">Abide</div>
-      <div id="signed-area" class="signed-area hidden">
-        <span id="user-email" class="user-email"></span>
-        <button id="signout-btn" class="btn">Sign out</button>
-      </div>
-    </header>
-
-    <main>
-      <section id="auth-section" class="panel center">
-        <h1>Abide — Shorts (POC)</h1>
-        <p>Sign in with Google to use your Google Drive as storage. Videos placed in your <code>/abide/</code> folder will be discoverable here (if you share them).</p>
-        <div class="controls">
-          <button id="google-signin" class="btn primary">Sign in with Google</button>
-        </div>
-        <div class="note">This is a proof-of-concept. Only use for testing.</div>
-      </section>
-
-      <section id="upload-section" class="panel hidden">
-        <h2>Your Abide Uploads</h2>
-        <div class="upload-row">
-          <input id="file-input" type="file" accept="video/*" />
-          <input id="tags-input" placeholder="Tags, comma separated (e.g. #minecraft,#gaming)" />
-          <label class="checkbox-inline"><input id="public-checkbox" type="checkbox" /> Make public (anyone with link)</label>
-          <button id="upload-btn" class="btn">Upload to /abide/</button>
-        </div>
-        <div id="upload-status" class="muted"></div>
-      </section>
-
-      <section id="feed-section" class="panel hidden">
-        <div id="filters" class="filters">
-          <input id="filter-tag" placeholder="Filter by tag (#minecraft)" />
-          <button id="apply-filter" class="btn small">Apply</button>
-          <button id="clear-filter" class="btn small">Clear</button>
-        </div>
-
-        <div id="video-feed" class="video-feed"></div>
-      </section>
-    </main>
-
-    <footer class="footer muted">
-      Built for PoC. See README for setup. No server required; uses Google Drive API.
-    </footer>
+<div id="ui">
+  <div id="hud">
+    <div class="stat">Level: <span id="level">1</span></div>
+    <div class="stat">Score: <span id="score">0</span></div>
+    <div class="stat">Time: <span id="timer">0</span>s</div>
+    <div class="stat">Seed: <span id="seed">-</span></div>
   </div>
+</div>
+<div id="touch-controls">
+  <div class="btn" id="up">▲</div>
+  <div style="display:flex;flex-direction:column;gap:6px">
+    <div class="btn" id="left">◀</div>
+    <div class="btn" id="right">▶</div>
+  </div>
+  <div class="btn" id="down">▼</div>
+</div>
+<canvas id="c"></canvas>
+<div id="message"></div>
+<script>
+// Single-file procedural maze escape game
+// Features: recursive-backtracker maze generation (seeded), arrow/WASD + swipe/tap controls, camera centering when maze exceeds window, seeded color scheme per level
 
-  <script type="module" src="script.js"></script>
+// Utilities: seeded RNG
+function mulberry32(a){return function(){a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a>>>15, 1 | a); t = t + Math.imul(t ^ t>>>7, 61 | t) ^ t; return ((t ^ t>>>14) >>> 0) / 4294967296;}} 
+function intFromString(s){var h=2166136261;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h+= (h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24);}return h>>>0}
+
+const canvas=document.getElementById('c');const ctx=canvas.getContext('2d');
+let level=1,score=0;
+let baseSeed = Math.floor(Math.random()*1e9);
+let currentSeed = baseSeed;
+let rng = mulberry32(currentSeed);
+
+const state={cols:10,rows:10,cell:36,maze:[],player:null,exit:null,cam:{x:0,y:0},timer:0,gameActive:false};
+
+function resize(){canvas.width = innerWidth; canvas.height = innerHeight;}
+addEventListener('resize',resize);resize();
+
+// Maze generation (iterative recursive backtracker)
+function generateMaze(cols,rows,seed){
+  rng = mulberry32(seed);
+  const grid = [];
+  for(let y=0;y<rows;y++){const row=[];for(let x=0;x<cols;x++){row.push({x,y,walls:[1,1,1,1],visited:false});}grid.push(row);} 
+  const stack=[];
+  const startX = Math.floor(rng()*cols); const startY = Math.floor(rng()*rows);
+  let current = grid[startY][startX]; current.visited=true; let visitedCount=1; const total=cols*rows;
+  while(visitedCount<total){
+    const {x,y}=current; const neighbors=[];
+    const dirs=[[0,-1,0],[1,0,1],[0,1,2],[-1,0,3]]; // up,right,down,left with wall index
+    for(const [dx,dy,dir] of dirs){const nx=x+dx, ny=y+dy; if(nx>=0 && nx<cols && ny>=0 && ny<rows && !grid[ny][nx].visited){neighbors.push({cell:grid[ny][nx],dir});}}
+    if(neighbors.length){
+      const pick = neighbors[Math.floor(rng()*neighbors.length)];
+      // remove walls between current and pick.cell
+      const nx=pick.cell.x, ny=pick.cell.y; const dir=pick.dir;
+      current.walls[dir]=0; pick.cell.walls[(dir+2)%4]=0;
+      stack.push(current);
+      current = pick.cell; current.visited=true; visitedCount++;
+    } else {
+      current = stack.pop();
+    }
+  }
+  return grid;
+}
+
+function newLevel(){
+  // increase maze size slowly with level
+  const base = 10;
+  const growthX = Math.floor((level-1)*0.8);
+  const growthY = Math.floor((level-1)*0.7);
+  const cols = base + growthX;
+  const rows = base + growthY;
+  // compute cell size so small mazes look nice, but allow big mazes to exceed window
+  const maxCell = Math.floor(Math.min(Math.max(14, Math.floor(Math.min(innerWidth/cols, innerHeight/rows))), 56));
+  const cell = Math.max(12, Math.min(maxCell, 48));
+  // seed and RNG
+  currentSeed = intFromString((baseSeed + level).toString());
+  rng = mulberry32(currentSeed);
+  const maze = generateMaze(cols,rows,currentSeed);
+  // place player at random cell and exit at far corner
+  const player = {x:0,y:0};
+  // find top-left start and bottom-right exit, but ensure passable
+  player.x = 0; player.y = 0;
+  const exit = {x:cols-1,y:rows-1};
+  // start state
+  state.cols=cols; state.rows=rows; state.cell=cell; state.maze=maze; state.player=player; state.exit=exit; 
+  // timer: give time roughly proportional to area but not excessive
+  state.timer = Math.max(8, Math.floor((cols*rows)/6));
+  state.gameActive = true;
+  document.getElementById('level').textContent = level;
+  document.getElementById('score').textContent = score;
+  document.getElementById('timer').textContent = state.timer;
+  document.getElementById('seed').textContent = currentSeed;
+  // color palette based on seed
+  generatePalette(currentSeed);
+}
+
+// Color palette generation based on seeded RNG
+let palette={bg:'#111',wall:'#ccc',floor:'#222',player:'#0f0',exit:'#f00'};
+function generatePalette(seed){
+  const r = mulberry32(seed);
+  const hue = Math.floor(r()*360);
+  const sat = 55 + Math.floor(r()*30);
+  const light = 45 + Math.floor(r()*10);
+  palette.bg = `hsl(${(hue+180)%360} ${sat}% ${Math.min(18,light-30)}%)`;
+  palette.floor = `hsl(${hue} ${sat}% ${Math.max(8,light-10)}%)`;
+  palette.wall = `hsl(${(hue+30)%360} ${Math.min(80,sat+10)}% ${Math.min(70,light+10)}%)`;
+  palette.player = `hsl(${(hue+200)%360} 80% 55%)`;
+  palette.exit = `hsl(${(hue+120)%360} 70% 45%)`;
+  document.body.style.background = palette.bg;
+}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const cols = state.cols, rows = state.rows, cell = state.cell;
+  const mazePixelW = cols*cell, mazePixelH = rows*cell;
+  // camera centering: if maze larger than window, center player; otherwise center maze in canvas
+  let camX = 0, camY = 0;
+  if(mazePixelW > canvas.width){
+    camX = state.player.x*cell - canvas.width/2 + cell/2;
+    camX = Math.max(0, Math.min(camX, mazePixelW - canvas.width));
+  } else {
+    camX = -(canvas.width - mazePixelW)/2 * -1; // center maze -> negative? simpler handle below
+    camX = -Math.floor((canvas.width - mazePixelW)/2);
+  }
+  if(mazePixelH > canvas.height){
+    camY = state.player.y*cell - canvas.height/2 + cell/2;
+    camY = Math.max(0, Math.min(camY, mazePixelH - canvas.height));
+  } else {
+    camY = -Math.floor((canvas.height - mazePixelH)/2);
+  }
+  state.cam.x = camX; state.cam.y = camY;
+
+  ctx.save(); ctx.translate(-camX, -camY);
+  // floor
+  ctx.fillStyle = palette.floor; ctx.fillRect(0,0,cols*cell,rows*cell);
+  // walls
+  ctx.strokeStyle = palette.wall; ctx.lineWidth = Math.max(2, Math.floor(cell*0.12)); ctx.lineCap='square';
+  for(let y=0;y<rows;y++){
+    for(let x=0;x<cols;x++){
+      const cellObj = state.maze[y][x]; const px = x*cell, py = y*cell;
+      // draw walls if present
+      const w = cellObj.walls;
+      if(w[0]){ ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(px+cell,py); ctx.stroke(); }
+      if(w[1]){ ctx.beginPath(); ctx.moveTo(px+cell,py); ctx.lineTo(px+cell,py+cell); ctx.stroke(); }
+      if(w[2]){ ctx.beginPath(); ctx.moveTo(px+cell,py+cell); ctx.lineTo(px,py+cell); ctx.stroke(); }
+      if(w[3]){ ctx.beginPath(); ctx.moveTo(px,py+cell); ctx.lineTo(px,py); ctx.stroke(); }
+    }
+  }
+  // exit
+  ctx.fillStyle = palette.exit; ctx.fillRect(state.exit.x*cell + cell*0.2, state.exit.y*cell + cell*0.2, cell*0.6, cell*0.6);
+  // player
+  ctx.fillStyle = palette.player; ctx.beginPath();
+  const px = state.player.x*cell + cell/2, py = state.player.y*cell + cell/2, r = Math.max(4, cell*0.32);
+  ctx.arc(px,py,r,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+// Movement: check walls to see if move allowed
+function tryMove(dx,dy){
+  if(!state.gameActive) return;
+  const nx = state.player.x + dx, ny = state.player.y + dy;
+  if(nx<0||nx>=state.cols||ny<0||ny>=state.rows) return;
+  // determine which wall blocks movement from current cell
+  const dir = dx===1?1:dx===-1?3:dy===1?2:0; // mapping
+  if(state.maze[state.player.y][state.player.x].walls[dir]) return; // blocked
+  state.player.x = nx; state.player.y = ny; 
+  if(state.player.x===state.exit.x && state.player.y===state.exit.y){
+    // reached exit
+    winLevel();
+  }
+}
+
+function winLevel(){
+  state.gameActive=false; score++; level++;
+  showMessage('Escaped! Proceeding to next maze');
+  setTimeout(()=>{hideMessage(); newLevel();},800);
+}
+
+function loseLevel(){
+  state.gameActive=false; const oldScore=score; score=0; level=1;
+  showMessage('Time expired. Score reset to 0. Restarting...');
+  setTimeout(()=>{hideMessage(); newLevel();},1000);
+}
+
+function showMessage(text){const el=document.getElementById('message');el.textContent=text;el.style.display='block';}
+function hideMessage(){const el=document.getElementById('message');el.style.display='none';}
+
+// Timer loop
+setInterval(()=>{
+  if(state.gameActive){ state.timer--; document.getElementById('timer').textContent = state.timer; if(state.timer<=0){ loseLevel(); }}
+},1000);
+
+// Input handling
+addEventListener('keydown',e=>{
+  if(['ArrowUp','w','W'].includes(e.key)) tryMove(0,-1);
+  if(['ArrowDown','s','S'].includes(e.key)) tryMove(0,1);
+  if(['ArrowLeft','a','A'].includes(e.key)) tryMove(-1,0);
+  if(['ArrowRight','d','D'].includes(e.key)) tryMove(1,0);
+});
+
+// touch buttons
+['up','down','left','right'].forEach(k=>{document.getElementById(k).addEventListener('touchstart',ev=>{ev.preventDefault(); if(k==='up')tryMove(0,-1); if(k==='down')tryMove(0,1); if(k==='left')tryMove(-1,0); if(k==='right')tryMove(1,0);} )});
+
+// swipe detection
+let touchStartX=0,touchStartY=0;
+addEventListener('touchstart',e=>{if(e.touches.length===1){touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY;}});
+addEventListener('touchend',e=>{if(!state.gameActive) return; const touch = e.changedTouches[0]; const dx = touch.clientX - touchStartX, dy = touch.clientY - touchStartY; if(Math.abs(dx)>30 || Math.abs(dy)>30){ if(Math.abs(dx)>Math.abs(dy)){ if(dx>0) tryMove(1,0); else tryMove(-1,0);} else { if(dy>0) tryMove(0,1); else tryMove(0,-1);} } else {
+  // tiny tap -> move toward tapped cell if adjacent
+  const rect = canvas.getBoundingClientRect(); const x = Math.floor((touch.clientX - rect.left + state.cam.x)/state.cell); const y = Math.floor((touch.clientY - rect.top + state.cam.y)/state.cell);
+  const dx2 = x - state.player.x, dy2 = y - state.player.y;
+  if(Math.abs(dx2)+Math.abs(dy2)===1) tryMove(dx2,dy2);
+}
+});
+
+// main loop
+function loop(){ draw(); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+
+// init
+newLevel();
+
+// expose simple controls for debugging in console
+window._game = {state, newLevel, tryMove};
+
+</script>
 </body>
 </html>
